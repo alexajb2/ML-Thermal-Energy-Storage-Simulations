@@ -97,19 +97,28 @@ def weighted_loss(predictions, targets, weights=torch.tensor([1.0, 1.0])):
 def train_model():
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    train_files = [
+    ### TRAINING FILES ###
+    case_1 = [
         f"Case1_TrialData_Sample{i}.csv"
-        for i in [
-            15, 16, 17, 18, 19, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32,
-            33, 34, 38, 39, 48, 49, 58, 59, 60, 61, 62, 63, 64, 65, 66,
-            67, 70, 71, 72, 73, 74, 75, 76, 77, 88, 89, 98, 99, 100,
-            101, 102, 103, 104, 105, 106, 107, 110, 111, 112, 113, 114,
-            115, 116, 117, 128, 129, 138, 139, 144, 145, 146, 147, 148,
-            149, 150
-        ] # Bro common data group L
+        for i in range(15, 151)
     ]
-    val_files = [f"Validation_{i}.csv" for i in range(1, 10)]
-    test_files = [f"Test_{i}.csv" for i in range(1, 6)]
+
+    case2_nonlinear = [f"Case2_Nonlinear_Sample{i}.csv" for i in range(7, 11)]
+    train_files = case_1 + case2_nonlinear
+
+    
+
+    ### VALIDATION FILES ###
+    case1 = [f"Validation_{i}.csv" for i in range(1, 10)]
+    #case2 = [f"Case2_Nonlinear_Sample{i}.csv" for i in range(1, 4)]
+    val_files = case1 
+
+    ### TESTING FILES ###
+    case1_test = [f"Test_{i}.csv" for i in range(1, 6)]
+    case2_test = [f"Case2_Nonlinear_Sample{i}.csv" for i in range(4, 7)]
+
+    test_files = case1_test + case2_test
+
 
     train_paths = [os.path.join(script_dir, "data", "train", f) for f in train_files]
     val_paths   = [os.path.join(script_dir, "data", "validation", f) for f in val_files]
@@ -212,62 +221,71 @@ def test_model(model, test_datasets):
                 axes = [axes]
 
             for idx in range(num_examples):
+                # Retrieve the input, actual target values, and the scaled time values
                 test_input, test_actual, time_values = test_dataset[idx]
 
-                test_input_batch = test_input.unsqueeze(0).to(device)  
+                test_input_batch = test_input.unsqueeze(0).to(device)
 
                 with torch.no_grad():
-                    predicted_sequence = model(test_input_batch).cpu().numpy()  
+                    predicted_sequence = model(test_input_batch).cpu().numpy()
 
-
+                # Extract predicted T_min and T_ave from the model output
                 t_min_pred = predicted_sequence[0, :, 0]
                 t_ave_pred = predicted_sequence[0, :, 1]
 
+                # T_max is provided as an input feature
+                t_max_input = test_input[:, 2].cpu().numpy()
 
-                t_max_input = test_input[ :, 2].cpu().numpy()
-
-
+                # Extract actual target values (scaled)
                 t_min_actual = test_actual[:, 0].numpy()
                 t_ave_actual = test_actual[:, 1].numpy()
-
-
-                t_max_actual = t_max_input
+                t_max_actual = t_max_input  # provided as input
 
                 scaler = test_dataset.scaler
 
-
+                # Unscale predicted T_min
                 dummy_pred_min = np.zeros((len(t_min_pred), 5))
                 dummy_pred_min[:, 1] = t_min_pred  # col 1 is T_min
                 inv_min = scaler.inverse_transform(dummy_pred_min)
-                t_min_pred_original = inv_min[:, 1]  # read back column 1
+                t_min_pred_original = inv_min[:, 1]
 
+                # Unscale predicted T_ave
                 dummy_pred_ave = np.zeros((len(t_ave_pred), 5))
                 dummy_pred_ave[:, 3] = t_ave_pred  # col 3 is T_ave
                 inv_ave = scaler.inverse_transform(dummy_pred_ave)
                 t_ave_pred_original = inv_ave[:, 3]
 
-
+                # Unscale provided T_max from input
                 dummy_input_max = np.zeros((len(t_max_input), 5))
-                dummy_input_max[:, 2] = t_max_input 
+                dummy_input_max[:, 2] = t_max_input  # col 2 is T_max
                 inv_max = scaler.inverse_transform(dummy_input_max)
-                t_max_pred_original = inv_max[:, 2]  
+                t_max_pred_original = inv_max[:, 2]
 
-
+                # Unscale actual T_min
                 dummy_act_min = np.zeros((len(t_min_actual), 5))
                 dummy_act_min[:, 1] = t_min_actual
                 inv_act_min = scaler.inverse_transform(dummy_act_min)
                 t_min_actual_original = inv_act_min[:, 1]
 
+                # Unscale actual T_ave
                 dummy_act_ave = np.zeros((len(t_ave_actual), 5))
                 dummy_act_ave[:, 3] = t_ave_actual
                 inv_act_ave = scaler.inverse_transform(dummy_act_ave)
                 t_ave_actual_original = inv_act_ave[:, 3]
 
+                # Unscale actual T_max
                 dummy_act_max = np.zeros((len(t_max_actual), 5))
                 dummy_act_max[:, 2] = t_max_actual
                 inv_act_max = scaler.inverse_transform(dummy_act_max)
                 t_max_actual_original = inv_act_max[:, 2]
 
+                # Unscale time values (assumed to be in column 0)
+                dummy_time = np.zeros((len(time_values), 5))
+                dummy_time[:, 0] = time_values
+                inv_time = scaler.inverse_transform(dummy_time)
+                time_values_original = inv_time[:, 0]
+
+                # Collect unscaled actual and predicted values for metric evaluation
                 all_actual.append(
                     np.stack([t_min_actual_original, t_max_actual_original, t_ave_actual_original], axis=1)
                 )
@@ -275,19 +293,17 @@ def test_model(model, test_datasets):
                     np.stack([t_min_pred_original, t_max_pred_original, t_ave_pred_original], axis=1)
                 )
 
+                # Plotting with unscaled time on the x-axis
                 ax = axes[idx]
-                ax.plot(time_values, t_min_actual_original, label="T_min (Actual)", color="blue")
-                ax.plot(time_values, t_min_pred_original, label="T_min (Predicted)", linestyle="dashed", color="blue")
+                ax.plot(time_values_original, t_min_actual_original, label="T_min (Actual)", color="blue")
+                ax.plot(time_values_original, t_min_pred_original, label="T_min (Predicted)", linestyle="dashed", color="blue")
+                ax.plot(time_values_original, t_max_actual_original, label="T_max (Actual)", color="red")
+                ax.plot(time_values_original, t_max_pred_original, label="T_max (Provided)", linestyle="dashed", color="red")
+                ax.plot(time_values_original, t_ave_actual_original, label="T_ave (Actual)", color="green")
+                ax.plot(time_values_original, t_ave_pred_original, label="T_ave (Predicted)", linestyle="dashed", color="green")
 
-                ax.plot(time_values, t_max_actual_original, label="T_max (Actual)", color="red")
-
-                ax.plot(time_values, t_max_pred_original, label="T_max (Provided)", linestyle="dashed", color="red")
-
-                ax.plot(time_values, t_ave_actual_original, label="T_ave (Actual)", color="green")
-                ax.plot(time_values, t_ave_pred_original, label="T_ave (Predicted)", linestyle="dashed", color="green")
-
-                ax.set_xlabel("Time (s) [Scaled in training]")
-                ax.set_ylabel("Temperature (°C)")
+                ax.set_xlabel("Time")
+                ax.set_ylabel("Temperature (C)")
                 ax.legend()
                 ax.set_title(f"Actual vs. Predicted for {actual_name} (Example {idx+1})")
 
@@ -296,6 +312,7 @@ def test_model(model, test_datasets):
         except Exception as e:
             print(f"Error testing on {actual_name}: {e}")
 
+    # Concatenate all actual and predicted values to compute overall metrics
     all_actual = np.concatenate(all_actual, axis=0)
     all_predicted = np.concatenate(all_predicted, axis=0)
     mape = mean_absolute_percentage_error(all_actual, all_predicted) * 100
@@ -303,7 +320,6 @@ def test_model(model, test_datasets):
 
     print(f"Overall MAPE: {mape:.2f}%")
     print(f"R-squared: {r2:.4f}")
-
 
     for fig in all_figures:
         plt.figure(fig.number)

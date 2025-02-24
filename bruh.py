@@ -1,6 +1,6 @@
 import os
 
-folder_path = r"C:\Users\froze\OneDrive\Desktop\ML_Research\ml_research_thermal_storage\data\train"
+folder_path = r"C:\Users\lolly\OneDrive\Desktop\Projects\ThermalAI\data\train"
 
 # List all filenames ending with .csv
 csv_files = [f for f in os.listdir(folder_path) if f.endswith(".csv")]
@@ -29,7 +29,6 @@ bruh_sorted = sorted(bruh)
 
 print("Extracted digits:", bruh)
 print("Sorted digits:", bruh_sorted)
-print("num files:", len(bruh_sorted))
 
 missing_digits = []
 
