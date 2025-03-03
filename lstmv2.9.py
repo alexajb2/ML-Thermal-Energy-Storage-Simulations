@@ -100,29 +100,28 @@ def train_model():
     ### TRAINING FILES ###
     case_1 = [
         f"Case1_TrialData_Sample{i}.csv"
-        for i in range(15, 151)
+        for i in range(1, 13)
     ]
 
-    case2_nonlinear = [f"Case2_Nonlinear_Sample{i}.csv" for i in range(7, 11)]
+    case2_nonlinear = [f"Case2_Nonlinear_Sample{i}.csv" for i in range(5, 7)]
     train_files = case_1 + case2_nonlinear
 
     
 
     ### VALIDATION FILES ###
-    case1 = [f"Validation_{i}.csv" for i in range(1, 10)]
-    #case2 = [f"Case2_Nonlinear_Sample{i}.csv" for i in range(1, 4)]
+    case1 = [f"Validation_{i}.csv" for i in range(1, 4)]
     val_files = case1 
 
     ### TESTING FILES ###
-    case1_test = [f"Test_{i}.csv" for i in range(1, 6)]
-    case2_test = [f"Case2_Nonlinear_Sample{i}.csv" for i in range(4, 7)]
+    case1_test = [f"Case{i}.csv" for i in range(1, 6)]
 
-    test_files = case1_test + case2_test
+    test_files = case1_test
 
 
     train_paths = [os.path.join(script_dir, "data", "train", f) for f in train_files]
     val_paths   = [os.path.join(script_dir, "data", "validation", f) for f in val_files]
     test_paths  = [os.path.join(script_dir, "data", "testing", f) for f in test_files]
+
 
     train_datasets = [ThermalDataset(path) for path in train_paths]
     val_datasets   = [ThermalDataset(path) for path in val_paths]
@@ -143,7 +142,7 @@ def train_model():
         optimizer, mode='min', factor=0.5, patience=50, verbose=True
     )
 
-    num_epochs = 10000
+    num_epochs = 1
     patience = 300  # early stopping
     best_val_loss = float('inf')
     early_stop_counter = 0
@@ -183,16 +182,16 @@ def train_model():
 
         scheduler.step(epoch_val_loss)
 
-        if epoch_val_loss < best_val_loss:
-            best_val_loss = epoch_val_loss
-            early_stop_counter = 0
-            best_model_path = os.path.join(script_dir, "best_model.pth")
-            torch.save(model.state_dict(), best_model_path)
-        else:
-            early_stop_counter += 1
-            if early_stop_counter >= patience:
-                print(f"Early stopping triggered at epoch {epoch+1}.")
-                break
+        # if epoch_val_loss < best_val_loss:
+        #     best_val_loss = epoch_val_loss
+        #     early_stop_counter = 0
+        #     best_model_path = os.path.join(script_dir, "best_model.pth")
+        #     torch.save(model.state_dict(), best_model_path)
+        # else:
+        #     early_stop_counter += 1
+        #     if early_stop_counter >= patience:
+        #         print(f"Early stopping triggered at epoch {epoch+1}.")
+        #         break
 
 
         if (epoch + 1) % 100 == 0:
@@ -295,11 +294,11 @@ def test_model(model, test_datasets):
 
                 # Plotting with unscaled time on the x-axis
                 ax = axes[idx]
-                ax.plot(time_values_original, t_min_actual_original, label="T_min (Actual)", color="blue")
+                # ax.plot(time_values_original, t_min_actual_original, label="T_min (Actual)", color="blue")
                 ax.plot(time_values_original, t_min_pred_original, label="T_min (Predicted)", linestyle="dashed", color="blue")
-                ax.plot(time_values_original, t_max_actual_original, label="T_max (Actual)", color="red")
-                ax.plot(time_values_original, t_max_pred_original, label="T_max (Provided)", linestyle="dashed", color="red")
-                ax.plot(time_values_original, t_ave_actual_original, label="T_ave (Actual)", color="green")
+                ax.plot(time_values_original, t_max_actual_original, label="Thermal Input", color="red")
+                # ax.plot(time_values_original, t_max_pred_original, label="T_max (Provided)", linestyle="dashed", color="red")
+                # ax.plot(time_values_original, t_ave_actual_original, label="T_ave (Actual)", color="green")
                 ax.plot(time_values_original, t_ave_pred_original, label="T_ave (Predicted)", linestyle="dashed", color="green")
 
                 ax.set_xlabel("Time")
@@ -313,17 +312,18 @@ def test_model(model, test_datasets):
             print(f"Error testing on {actual_name}: {e}")
 
     # Concatenate all actual and predicted values to compute overall metrics
-    all_actual = np.concatenate(all_actual, axis=0)
-    all_predicted = np.concatenate(all_predicted, axis=0)
-    mape = mean_absolute_percentage_error(all_actual, all_predicted) * 100
-    r2 = r2_score(all_actual, all_predicted)
+    # all_actual = np.concatenate(all_actual, axis=0)
+    # all_predicted = np.concatenate(all_predicted, axis=0)
+    # mape = mean_absolute_percentage_error(all_actual, all_predicted) * 100
+    # r2 = r2_score(all_actual, all_predicted)
 
-    print(f"Overall MAPE: {mape:.2f}%")
-    print(f"R-squared: {r2:.4f}")
+    # print(f"Overall MAPE: {mape:.2f}%")
+    # print(f"R-squared: {r2:.4f}")
 
     for fig in all_figures:
         plt.figure(fig.number)
     plt.show()
+
 
 
 if __name__ == "__main__":
