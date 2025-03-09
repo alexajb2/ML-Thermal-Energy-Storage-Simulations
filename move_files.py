@@ -3,8 +3,8 @@ import shutil
 import random
 
 # Define the source and target directories
-source_dir = 'data/csvs_unprocessed'
-training_dir = 'data/training'
+source_dir = 'data/csvs_interpolated'
+training_dir = 'data/train'
 validation_dir = 'data/validation'
 
 # Create target directories if they don't exist
