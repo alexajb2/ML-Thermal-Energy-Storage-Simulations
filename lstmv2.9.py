@@ -7,294 +7,307 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-import glob  # Added to dynamically list files
+import glob
 from sklearn.metrics import mean_absolute_percentage_error, r2_score
 
 class ThermalDataset(Dataset):
-	def __init__(self, csv_file):
-		self.file_name = os.path.basename(csv_file)
-		df = pd.read_csv(csv_file)
-		df["FileName"] = self.file_name
+    def __init__(self, csv_file, scaler=None):
+        self.file_name = os.path.basename(csv_file)
+        df = pd.read_csv(csv_file)
+        df["FileName"] = self.file_name
 
-		columns_for_scaling = [
-			"Time (s)", 
-			"T_min (C)", 
-			"T_max (C)", 
-			"T_ave (C)", 
-			"Thermal_Input (C)",
-		]
-		self.scaler = MinMaxScaler()
-		self.scaler.fit(df[columns_for_scaling])
+        columns_for_scaling = ["Time (s)", "T_min (C)", "T_max (C)", "T_ave (C)", "Thermal_Input (C)"]
+        if scaler is None:
+            self.scaler = MinMaxScaler()
+            self.scaler.fit(df[columns_for_scaling])
+        else:
+            self.scaler = scaler
+        df[columns_for_scaling] = self.scaler.transform(df[columns_for_scaling])
 
+        grouped = df.groupby("FileName")
+        self.X, self.Y, self.time_values = [], [], []
+        self.thermal_input_full = []
+        self.full_time, self.full_t_min, self.full_t_max, self.full_t_ave = [], [], [], []
 
-		df[columns_for_scaling] = self.scaler.transform(df[columns_for_scaling])
+        for _, group in grouped:
+            # X_seq uses all rows except the last one and Y_seq is the shifted ground truth
+            X_seq = group[["Time (s)", "T_min (C)", "T_ave (C)", "Thermal_Input (C)"]].values[:-1]
+            Y_seq = group[["T_min (C)", "T_ave (C)"]].values[1:]
+            time_vals = group["Time (s)"].values[1:]
+            thermal_input = group["Thermal_Input (C)"].values[:-1]
 
+            self.X.append(X_seq)
+            self.Y.append(Y_seq)
+            self.time_values.append(time_vals)
+            self.thermal_input_full.append(thermal_input)
+            self.full_time.append(group["Time (s)"].values)
+            self.full_t_min.append(group["T_min (C)"].values)
+            self.full_t_max.append(group["T_max (C)"].values)
+            self.full_t_ave.append(group["T_ave (C)"].values)
 
-		grouped = df.groupby("FileName")
-		self.X, self.Y, self.time_values = [], [], []
+        self.X = torch.tensor(np.array(self.X), dtype=torch.float32)
+        self.Y = torch.tensor(np.array(self.Y), dtype=torch.float32)
+        self.time_values = np.array(self.time_values)
+        self.thermal_input_full = np.array(self.thermal_input_full)
+        self.full_time = np.array(self.full_time)
+        self.full_t_min = np.array(self.full_t_min)
+        self.full_t_max = np.array(self.full_t_max)
+        self.full_t_ave = np.array(self.full_t_ave)
 
-		for _, group in grouped:
+    def __len__(self):
+        return len(self.X)
 
-			X_seq = group[[
-				"Time (s)",
-				"T_min (C)",
-				"T_max (C)",
-				"T_ave (C)",
-				"Thermal_Input (C)"
-			]].values[:-1]
+    def __getitem__(self, idx):
+        return (
+            self.X[idx],
+            self.Y[idx],
+            self.time_values[idx],
+            self.thermal_input_full[idx],
+            self.full_time[idx],
+            self.full_t_min[idx],
+            self.full_t_max[idx],
+            self.full_t_ave[idx]
+        )
 
+class ThermalLSTM(nn.Module):
+    def __init__(self, input_size=4, hidden_size=48, output_size=2, num_layers=4):
+        super(ThermalLSTM, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, output_size)
 
-			Y_seq = group[["T_min (C)", "T_max (C)", "T_ave (C)"]].values[1:]
-			Y_seq = Y_seq[:, [0, 2]]  # keep only T_min & T_ave
+    def forward(self, x, hidden):
+        out, hidden = self.lstm(x, hidden)
+        out = self.fc(out)
+        return out, hidden
 
-			time_vals = group["Time (s)"].values[1:]  # shifted by 1
-
-			self.X.append(X_seq)
-			self.Y.append(Y_seq)
-			self.time_values.append(time_vals)
-
-		self.X = torch.tensor(np.array(self.X), dtype=torch.float32)
-		self.Y = torch.tensor(np.array(self.Y), dtype=torch.float32)
-		self.time_values = np.array(self.time_values)
-
-		print(f"Loaded {len(self.X)} sequences from {self.file_name}.")
-		print(f"  Input shape: {self.X[0].shape}, Target shape: {self.Y[0].shape}")
-
-	def __len__(self):
-		return len(self.X)
-
-	def __getitem__(self, idx):
-		return self.X[idx], self.Y[idx], self.time_values[idx]
-
-
-# LSTM :]
-
-class LSTMModel(nn.Module):
-	def __init__(self, input_size=5, hidden_size=48, num_layers=4, output_size=2):
-		super(LSTMModel, self).__init__()
-		self.hidden_size = hidden_size
-		self.num_layers = num_layers
-
-		self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.3)
-		self.fc = nn.Linear(hidden_size, output_size)
-
-	def forward(self, x):
-		batch_size = x.size(0)
-
-		h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=x.device)
-		c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=x.device)
-		out, _ = self.lstm(x, (h0, c0))
-		out = self.fc(out)  
-		return out
-
+    def init_hidden(self, batch_size):
+        device = next(self.parameters()).device
+        h = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+        c = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+        return (h, c)
 
 def weighted_loss(predictions, targets, weights=torch.tensor([1.0, 1.0])):
-	weights = weights.to(predictions.device)
-	loss = torch.abs(predictions - targets)
-	return torch.mean(loss * weights)
-
-
+    weights = weights.to(predictions.device)
+    loss = torch.abs(predictions - targets)
+    return torch.mean(loss * weights)
 
 def train_model():
-	script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    train_paths = glob.glob(os.path.join(script_dir, "data", "train", "*.csv"))
+    val_paths = glob.glob(os.path.join(script_dir, "data", "validation", "*.csv"))
+    test_paths = glob.glob(os.path.join(script_dir, "data", "testing", "*.csv"))
 
-	# Training files: all CSV files in data/train
-	train_paths = glob.glob(os.path.join(script_dir, "data", "train", "*.csv"))
+    # Load all training data to fit the scaler
+    train_dfs = [pd.read_csv(path) for path in train_paths]
+    combined_train_df = pd.concat(train_dfs, ignore_index=True)
+    columns_for_scaling = ["Time (s)", "T_min (C)", "T_max (C)", "T_ave (C)", "Thermal_Input (C)"]
+    scaler = MinMaxScaler()
+    scaler.fit(combined_train_df[columns_for_scaling])
 
-	# Validation files: all CSV files in data/validation
-	val_paths = glob.glob(os.path.join(script_dir, "data", "validation", "*.csv"))
+    # Create datasets with the unified scaler
+    train_datasets = [ThermalDataset(path, scaler=scaler) for path in train_paths]
+    val_datasets = [ThermalDataset(path, scaler=scaler) for path in val_paths]
+    test_datasets = [ThermalDataset(path, scaler=scaler) for path in test_paths]
 
-	# Testing files: all CSV files in data/testing
-	test_paths = glob.glob(os.path.join(script_dir, "data", "testing", "*.csv"))
+    combined_train_dataset = ConcatDataset(train_datasets)
+    combined_val_dataset = ConcatDataset(val_datasets)
 
-	# Create datasets from the file paths
-	train_datasets = [ThermalDataset(path) for path in train_paths]
-	val_datasets = [ThermalDataset(path) for path in val_paths]
-	test_datasets = [ThermalDataset(path) for path in test_paths]
+    train_dataloader = DataLoader(combined_train_dataset, batch_size=16, shuffle=True)
+    val_dataloader = DataLoader(combined_val_dataset, batch_size=16, shuffle=False)
 
-	# Combine datasets and create data loaders
-	combined_train_dataset = ConcatDataset(train_datasets)
-	combined_val_dataset = ConcatDataset(val_datasets)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = ThermalLSTM(input_size=4).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=50)
 
-	train_dataloader = DataLoader(combined_train_dataset, batch_size=16, shuffle=True)
-	val_dataloader = DataLoader(combined_val_dataset, batch_size=16, shuffle=False)
+    num_epochs = 1000
+    patience = 300
+    best_val_loss = float('inf')
+    early_stop_counter = 0
 
-	# Set up device and model
-	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-	model = LSTMModel().to(device)
-	optimizer = optim.Adam(model.parameters(), lr=0.001)
+    for epoch in range(num_epochs):
+        model.train()
+        total_train_loss = 0.0
+        # Decay teacher forcing ratio linearly from 1.0 to 0.0 over epochs.
+        teacher_forcing_ratio = max(0.0, 1.0 - (epoch / num_epochs))
+        
+        for batch in train_dataloader:
+            inputs, targets, _, _, _, _, _, _ = batch
+            inputs = inputs.to(device)    # shape: (B, L, 4)
+            targets = targets.to(device)  # shape: (B, L, 2)
+            batch_size, seq_len, _ = inputs.shape
+            optimizer.zero_grad()
+            hidden = model.init_hidden(batch_size)
+            batch_loss = 0.0
+            # Initialize with the ground truth T_min and T_ave at time 0
+            current_t_min = inputs[:, 0, 1]  # shape: (B,)
+            current_t_ave = inputs[:, 0, 2]  # shape: (B,)
+            for t in range(seq_len):
+                # Use time and thermal input from the current time step
+                time_t = inputs[:, t, 0]
+                thermal_input_t = inputs[:, t, 3]
+                # Build the input using current values for T_min and T_ave
+                input_t = torch.stack([time_t, current_t_min, current_t_ave, thermal_input_t], dim=1)
+                input_t = input_t.unsqueeze(1)  # shape: (B, 1, 4)
+                output, hidden = model(input_t, hidden)  # output shape: (B, 1, 2)
+                output = output.squeeze(1)  # shape: (B, 2)
+                target_t = targets[:, t, :]  # ground truth for current time step
+                loss_t = weighted_loss(output, target_t)
+                batch_loss += loss_t
+                if t < seq_len - 1:
+                    # Scheduled sampling: decide per sample whether to use ground truth or prediction for the next step
+                    use_teacher = (torch.rand(batch_size, device=device) < teacher_forcing_ratio).float()
+                    ground_truth = inputs[:, t+1, 1:3]  # ground truth T_min and T_ave at next time step
+                    current_t_min = use_teacher * ground_truth[:, 0] + (1 - use_teacher) * output[:, 0]
+                    current_t_ave = use_teacher * ground_truth[:, 1] + (1 - use_teacher) * output[:, 1]
+            loss = batch_loss / seq_len
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            total_train_loss += loss.item()
 
-	scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-		optimizer, mode='min', factor=0.5, patience=50, verbose=True
-	)
+        epoch_train_loss = total_train_loss / len(train_dataloader)
 
-	num_epochs = 1
-	patience = 300  # early stopping
-	best_val_loss = float('inf')
-	early_stop_counter = 0
+        model.eval()
+        total_val_loss = 0.0
+        with torch.no_grad():
+            for val_batch in val_dataloader:
+                val_inputs, val_targets, _, _, _, _, _, _ = val_batch
+                val_inputs = val_inputs.to(device)
+                val_targets = val_targets.to(device)
+                batch_size, seq_len, _ = val_inputs.shape
+                val_hidden = model.init_hidden(batch_size)
+                batch_val_loss = 0.0
+                current_t_min = val_inputs[:, 0, 1]
+                current_t_ave = val_inputs[:, 0, 2]
+                for t in range(seq_len):
+                    time_t = val_inputs[:, t, 0]
+                    thermal_input_t = val_inputs[:, t, 3]
+                    input_t = torch.stack([time_t, current_t_min, current_t_ave, thermal_input_t], dim=1)
+                    input_t = input_t.unsqueeze(1)
+                    output, val_hidden = model(input_t, val_hidden)
+                    output = output.squeeze(1)
+                    target_t = val_targets[:, t, :]
+                    loss_t = weighted_loss(output, target_t)
+                    batch_val_loss += loss_t
+                    if t < seq_len - 1:
+                        # During validation, use full teacher forcing (i.e. always use ground truth)
+                        current_t_min = val_inputs[:, t+1, 1]
+                        current_t_ave = val_inputs[:, t+1, 2]
+                total_val_loss += (batch_val_loss / seq_len).item()
 
-	# Training loop
-	for epoch in range(num_epochs):
-		model.train()
-		total_train_loss = 0.0
+        epoch_val_loss = total_val_loss / len(val_dataloader)
+        scheduler.step(epoch_val_loss)
 
-		for inputs, targets, _ in train_dataloader:
-			inputs, targets = inputs.to(device), targets.to(device)
-			optimizer.zero_grad()
-			outputs = model(inputs)
-			loss = weighted_loss(outputs, targets)
-			loss.backward()
-			torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-			optimizer.step()
-			total_train_loss += loss.item()
+        if epoch_val_loss < best_val_loss:
+            best_val_loss = epoch_val_loss
+            torch.save(model.state_dict(), os.path.join(script_dir, "best_model.pth"))
+            early_stop_counter = 0
+        else:
+            early_stop_counter += 1
+            if early_stop_counter >= patience:
+                print("Early stopping triggered.")
+                break
 
-		epoch_train_loss = total_train_loss / len(train_dataloader)
+        if (epoch + 1) % 100 == 0:
+            print(f"[Epoch {epoch+1}/{num_epochs}] Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
 
-		model.eval()
-		total_val_loss = 0.0
-		with torch.no_grad():
-			for val_inputs, val_targets, _ in val_dataloader:
-				val_inputs, val_targets = val_inputs.to(device), val_targets.to(device)
-				val_outputs = model(val_inputs)
-				loss_val = weighted_loss(val_outputs, val_targets)
-				total_val_loss += loss_val.item()
-
-		epoch_val_loss = total_val_loss / len(val_dataloader)
-		scheduler.step(epoch_val_loss)
-
-		if (epoch + 1) % 100 == 0:
-			print(f"[Epoch {epoch+1}/{num_epochs}] "
-				f"Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
-
-	# Load the best model (assuming it was saved in the original code)
-	model.load_state_dict(torch.load(os.path.join(script_dir, "best_model.pth")))
-	return model, test_datasets
-
+    # Load the best model after training
+    model.load_state_dict(torch.load(os.path.join(script_dir, "best_model.pth")))
+    return model, test_datasets
 
 def test_model(model, test_datasets):
-	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-	all_figures = []
-	all_actual = []
-	all_predicted = []
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.eval()
+    all_figures = []
+    burn_in_steps = 5  # Number of initial steps to use ground truth inputs
 
-	for i, test_dataset in enumerate(test_datasets):
+    for test_dataset in test_datasets:
+        actual_name = os.path.basename(test_dataset.file_name)
+        print(f"Testing on dataset: {actual_name}")
 
-		actual_name = os.path.basename(test_dataset.file_name)
-		print(f"Testing on dataset: {actual_name}")
+        # Assume one example per file
+        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+        test_input, test_actual, time_values, thermal_input_full, full_time, full_t_min, full_t_max, full_t_ave = test_dataset[0]
+        test_input = test_input.to(device)
+        thermal_input_full = torch.tensor(thermal_input_full, device=device)
+        seq_len = test_input.shape[0]
 
-		try:
-			num_examples = len(test_dataset)
-			fig, axes = plt.subplots(num_examples, 1, figsize=(10, 5 * num_examples))
-			if num_examples == 1:
-				axes = [axes]
+        # Initialize with ground truth from first step
+        current_t_min = test_input[0, 1]
+        current_t_ave = test_input[0, 2]
 
-			for idx in range(num_examples):
-				# Retrieve the input, actual target values, and the scaled time values
-				test_input, test_actual, time_values = test_dataset[idx]
+        hidden = model.init_hidden(batch_size=1)
+        predictions = []
 
-				test_input_batch = test_input.unsqueeze(0).to(device)
+        for t in range(seq_len):
+            # For burn-in period, use ground truth T_min and T_ave
+            if t < burn_in_steps:
+                input_t_min = test_input[t, 1]
+                input_t_ave = test_input[t, 2]
+            else:
+                input_t_min = current_t_min
+                input_t_ave = current_t_ave
 
-				with torch.no_grad():
-					predicted_sequence = model(test_input_batch).cpu().numpy()
+            input_x = torch.tensor([
+                test_input[t, 0],
+                input_t_min,
+                input_t_ave,
+                thermal_input_full[t]
+            ], dtype=torch.float32).view(1, 1, 4).to(device)
 
-				# Extract predicted T_min and T_ave from the model output
-				t_min_pred = predicted_sequence[0, :, 0]
-				t_ave_pred = predicted_sequence[0, :, 1]
+            with torch.no_grad():
+                output, hidden = model(input_x, hidden)
+                prediction = output[0, 0]
+                predictions.append(prediction.cpu().numpy())
+                # Once burn-in is over, update with model's prediction
+                if t >= burn_in_steps - 1:
+                    current_t_min = prediction[0]
+                    current_t_ave = prediction[1]
 
-				# T_max is provided as an input feature
-				t_max_input = test_input[:, 2].cpu().numpy()
+        predicted_sequence = np.array(predictions)
+        t_min_pred = predicted_sequence[:, 0]
+        t_ave_pred = predicted_sequence[:, 1]
 
-				# Extract actual target values (scaled)
-				t_min_actual = test_actual[:, 0].numpy()
-				t_ave_actual = test_actual[:, 1].numpy()
-				t_max_actual = t_max_input  # provided as input
+        scaler = test_dataset.scaler
 
-				scaler = test_dataset.scaler
+        dummy = np.zeros((len(full_time), 5))
+        dummy[:, 0] = full_time
+        full_time_original = scaler.inverse_transform(dummy)[:, 0]
 
-				# Unscale predicted T_min
-				dummy_pred_min = np.zeros((len(t_min_pred), 5))
-				dummy_pred_min[:, 1] = t_min_pred  # col 1 is T_min
-				inv_min = scaler.inverse_transform(dummy_pred_min)
-				t_min_pred_original = inv_min[:, 1]
+        dummy[:, 1] = full_t_min
+        full_t_min_original = scaler.inverse_transform(dummy)[:, 1]
 
-				# Unscale predicted T_ave
-				dummy_pred_ave = np.zeros((len(t_ave_pred), 5))
-				dummy_pred_ave[:, 3] = t_ave_pred  # col 3 is T_ave
-				inv_ave = scaler.inverse_transform(dummy_pred_ave)
-				t_ave_pred_original = inv_ave[:, 3]
+        dummy[:, 2] = full_t_max
+        full_t_max_original = scaler.inverse_transform(dummy)[:, 2]
 
-				# Unscale provided T_max from input
-				dummy_input_max = np.zeros((len(t_max_input), 5))
-				dummy_input_max[:, 2] = t_max_input  # col 2 is T_max
-				inv_max = scaler.inverse_transform(dummy_input_max)
-				t_max_pred_original = inv_max[:, 2]
+        dummy[:, 3] = full_t_ave
+        full_t_ave_original = scaler.inverse_transform(dummy)[:, 3]
 
-				# Unscale actual T_min
-				dummy_act_min = np.zeros((len(t_min_actual), 5))
-				dummy_act_min[:, 1] = t_min_actual
-				inv_act_min = scaler.inverse_transform(dummy_act_min)
-				t_min_actual_original = inv_act_min[:, 1]
+        dummy_pred = np.zeros((len(t_min_pred), 5))
+        dummy_pred[:, 1] = t_min_pred
+        dummy_pred[:, 3] = t_ave_pred
+        inv_pred = scaler.inverse_transform(dummy_pred)
+        t_min_pred_original = inv_pred[:, 1]
+        t_ave_pred_original = inv_pred[:, 3]
 
-				# Unscale actual T_ave
-				dummy_act_ave = np.zeros((len(t_ave_actual), 5))
-				dummy_act_ave[:, 3] = t_ave_actual
-				inv_act_ave = scaler.inverse_transform(dummy_act_ave)
-				t_ave_actual_original = inv_act_ave[:, 3]
+        ax.plot(full_time_original, full_t_min_original, label="T_min (Actual)", color="blue")
+        ax.plot(full_time_original[1:], t_min_pred_original, label="T_min (Predicted)", linestyle="dashed", color="blue")
+        ax.plot(full_time_original, full_t_ave_original, label="T_ave (Actual)", color="green")
+        ax.plot(full_time_original[1:], t_ave_pred_original, label="T_ave (Predicted)", linestyle="dashed", color="green")
+        ax.plot(full_time_original, full_t_max_original, label="T_max (Actual)", color="red")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Temperature (C)")
+        ax.legend()
+        ax.set_title(f"Actual vs. Predicted for {actual_name}")
+        all_figures.append(fig)
 
-				# Unscale actual T_max
-				dummy_act_max = np.zeros((len(t_max_actual), 5))
-				dummy_act_max[:, 2] = t_max_actual
-				inv_act_max = scaler.inverse_transform(dummy_act_max)
-				t_max_actual_original = inv_act_max[:, 2]
-
-				# Unscale time values (assumed to be in column 0)
-				dummy_time = np.zeros((len(time_values), 5))
-				dummy_time[:, 0] = time_values
-				inv_time = scaler.inverse_transform(dummy_time)
-				time_values_original = inv_time[:, 0]
-
-				# Collect unscaled actual and predicted values for metric evaluation
-				all_actual.append(
-					np.stack([t_min_actual_original, t_max_actual_original, t_ave_actual_original], axis=1)
-				)
-				all_predicted.append(
-					np.stack([t_min_pred_original, t_max_pred_original, t_ave_pred_original], axis=1)
-				)
-
-				# Plotting with unscaled time on the x-axis
-				ax = axes[idx]
-				# ax.plot(time_values_original, t_min_actual_original, label="T_min (Actual)", color="blue")
-				ax.plot(time_values_original, t_min_pred_original, label="T_min (Predicted)", linestyle="dashed", color="blue")
-				ax.plot(time_values_original, t_max_actual_original, label="Thermal Input", color="red")
-				# ax.plot(time_values_original, t_max_pred_original, label="T_max (Provided)", linestyle="dashed", color="red")
-				# ax.plot(time_values_original, t_ave_actual_original, label="T_ave (Actual)", color="green")
-				ax.plot(time_values_original, t_ave_pred_original, label="T_ave (Predicted)", linestyle="dashed", color="green")
-
-				ax.set_xlabel("Time")
-				ax.set_ylabel("Temperature (C)")
-				ax.legend()
-				ax.set_title(f"Actual vs. Predicted for {actual_name} (Example {idx+1})")
-
-			all_figures.append(fig)
-
-		except Exception as e:
-			print(f"Error testing on {actual_name}: {e}")
-
-	# Concatenate all actual and predicted values to compute overall metrics
-	all_actual = np.concatenate(all_actual, axis=0)
-	all_predicted = np.concatenate(all_predicted, axis=0)
-	mape = mean_absolute_percentage_error(all_actual, all_predicted) * 100
-	r2 = r2_score(all_actual, all_predicted)
-
-	print(f"Overall MAPE: {mape:.2f}%")
-	print(f"R-squared: {r2:.4f}")
-
-	for fig in all_figures:
-		plt.figure(fig.number)
-	plt.show()
-
-
+    for fig in all_figures:
+        plt.figure(fig.number)
+    plt.show()
 
 if __name__ == "__main__":
-	trained_model, test_datasets = train_model()
-	test_model(trained_model, test_datasets)
+    trained_model, test_datasets = train_model()
+    test_model(trained_model, test_datasets)
