@@ -18,7 +18,7 @@ All model results are available in the `results` folder. We tested five cases wi
 
 ![Case 4](results/gru_results/Figure_4.png)
 
-Below is a table of training and testing times. At this stage, testing times are more relevant, as training occurs only once. Additionally, since the feature set is currently limited, the recorded times are less critical than they will be in future iterations. That said, all models complete testing in under a few seconds—significantly faster than traditional simulations, which can take approximately 10 minutes.
+Below is a table of training and testing times. At this stage, testing times are more relevant, as training occurs only once. Additionally, since the feature set is currently limited, the recorded times are less critical than they will be in future iterations. That said, all models complete testing in under a second—significantly faster than traditional simulations, which can take approximately 10 minutes.
 
 | Model                   | GRU  | LSTM | RBF-RNN | RNN  |
 |-------------------------|------|------|---------|------|
