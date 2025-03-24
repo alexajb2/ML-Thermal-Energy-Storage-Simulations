@@ -20,6 +20,12 @@ All model results are available in the `results` folder. We tested five cases wi
 
 Below is a table of training and testing times. At this stage, testing times are more relevant, as training occurs only once. Additionally, since the feature set is currently limited, the recorded times are less critical than they will be in future iterations. That said, all models complete testing in under a few seconds—significantly faster than traditional simulations, which can take approximately 10 minutes.
 
+| Model                   | GRU  | LSTM | RBF-RNN | RNN  |
+|-------------------------|------|------|---------|------|
+| **Training Time (s)**   | 60   | 58   | 122     | 49   |
+| **Average Testing Time (s)** | 0.084 | 0.067 | 0.13    | 0.07 |
+
+
 ## Status
 This research is ongoing, with discharge patterns yet to be trained or tested. Expanding the dataset with a broader range of features will be essential for developing models that generalize well across different simulation scenarios. As the feature space grows, dimensionality reduction techniques will become crucial for maintaining efficiency. Future research will further explore ensemble models and feature reduction strategies.
 
